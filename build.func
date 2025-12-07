@@ -398,10 +398,8 @@ run_build(){
     BRG=$(ask_input "Bridge" "$BRG")
     NET=$(ask_input "IPv4 (dhcp or CIDR,gw=x.x.x.x)" "$NET")
     if ask_yesno "Set root password?"; then PW=$(ask_password "Root password"); fi
+    if ask_yesno "Configure SSH keys?"; then configure_ssh_settings; fi
   fi
-
-  # Configure SSH (replaces old SSH_PUB manual entry)
-  configure_ssh_settings
 
   local tmpl_storage container_storage
   tmpl_storage=$(select_storage template) || exit 1
