@@ -338,9 +338,9 @@ post_customize(){
   pct exec "$id" -- bash -c "apt-get update"
   msg_ok "Wiren Board repo added"
 
-  msg_info "Installing WB UI and SSH (this may take 10-15 minutes)..."
-  echo "  → Installing: wb-mqtt-homeui openssh-server"
-  pct exec "$id" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y wb-mqtt-homeui openssh-server"
+  msg_info "Installing WB packages and SSH (this may take 10-15 minutes)..."
+  echo "  → Installing: wb-mqtt-serial wb-mqtt-confed wb-rules mosquitto nginx openssh-server"
+  pct exec "$id" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y wb-mqtt-serial wb-mqtt-confed wb-rules mosquitto nginx openssh-server"
   msg_ok "WB packages installed"
 
   msg_info "Configuring services..."
