@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# Minimal build helper inspired by community-scripts/ProxmoxVE (MIT)
+# Tailored for WB Bullseye armhf LXC creation.
+
+set -Eeuo pipefail
+
+# ---------- UI helpers ----------
+INFO="[i]"; OK="[ok]"; ERR="[err]"; WARN="[warn]"
+
+msg_info(){ echo -e "${INFO} $*"; }
+msg_ok(){ echo -e "${OK} $*"; }
+msg_err(){ echo -e "${ERR} $*" >&2; }
+msg_warn(){ echo -e "${WARN} $*"; }
+
+header_info(){ clear; echo "=== $1 LXC Builder (WB) ==="; }
+
+# ---------- guards ----------
+require_root(){ if [[ $(id -u) -ne 0 ]]; then msg_err "Run as root on Proxmox host"; exit 1; fi; }
+require_pve(){ command -v pveversion >/dev/null || { msg_err "Run on Proxmox VE host"; exit 1; }; }
+
+# ---------- whiptail wrappers ----------
+ask_input(){ local title="$1" def="$2"; whiptail --inputbox "$title" 10 60 "$def" 3>&1 1>&2 2>&3; }
+ask_password(){ local title="$1"; whiptail --passwordbox "$title" 10 60 3>&1 1>&2 2>&3; }
+ask_yesno(){ local title="$1"; whiptail --yesno "$title" 10 60; }
+
+# ---------- storage selection ----------
+select_storage(){
+  local class="$1" content="rootdir" label="Container"; [[ "$class" == "template" ]] && { content="vztmpl"; label="Template"; }
+  local map opts=() name info
+  while read -r name _ _ _ used avail _; do
+    [[ -z "$name" ]] && continue
+    info="Free: ${avail}K  Used: ${used}K"
+    opts+=("$name" "$info")
+  done < <(pvesm status -content "$content" | awk 'NR>1')
+
+  if ((${#opts[@]}==2)); then echo "${opts[0]}"; return 0; fi
+  whiptail --title "Select $label storage" --menu "Storage for $label" 16 60 6 "${opts[@]}" 3>&1 1>&2 2>&3
+}
+
+# ---------- template handling ----------
+ensure_template(){
+  local storage="$1" url="$2" filename
+  filename="$(basename "$url")"
+  if pveam list "$storage" 2>/dev/null | awk '{print $2}' | grep -q "$filename"; then
+    msg_ok "Template already present: $filename"
+  else
+    msg_info "Downloading template to $storage: $filename"
+    pveam download "$storage" "$url" >/dev/null
+    msg_ok "Template downloaded"
+  fi
+  echo "$filename"
+}
+
+# ---------- pct helpers ----------
+create_ct(){
+  local ctid="$1" tmpl_storage="$2" tmpl_file="$3" container_storage="$4" opts=()
+  local ssh_file=""
+  opts+=("-arch" "armhf")
+  opts+=("-hostname" "$HN")
+  opts+=("-cores" "$CORE_COUNT")
+  opts+=("-memory" "$RAM_SIZE")
+  opts+=("-swap" "$SWAP_SIZE")
+  opts+=("-rootfs" "${container_storage}:${DISK_SIZE}")
+  opts+=("-unprivileged" "1")
+  opts+=("-ostype" "debian")
+  opts+=("-features" "nesting=1")
+  opts+=("-net0" "name=eth0,bridge=${BRG},ip=${NET}")
+  [[ -n "$PW" ]] && opts+=("-password" "$PW")
+  if [[ -n "$SSH_PUB" ]]; then
+    ssh_file="$(mktemp)"
+    printf '%s\n' "$SSH_PUB" >"$ssh_file"
+    opts+=("-ssh-public-keys" "$ssh_file")
+  fi
+
+  msg_info "Creating CT $ctid"
+  pct create "$ctid" "${tmpl_storage}:vztmpl/${tmpl_file}" "${opts[@]}"
+  [[ -n "$ssh_file" ]] && rm -f "$ssh_file"
+  msg_ok "CT $ctid created"
+}
+
+wait_net(){
+  local id="$1"; msg_info "Waiting for network (CT $id)"; for _ in {1..20}; do
+    ip=$(pct exec "$id" -- hostname -I | awk '{print $1}') || true
+    if [[ -n "$ip" ]]; then msg_ok "IP: $ip"; return 0; fi; sleep 1; done; msg_warn "No IP detected"; }
+
+post_customize(){
+  local id="$1"
+  msg_info "Base packages"
+  pct exec "$id" -- bash -c "apt-get update && apt-get install -y curl gnupg ca-certificates sudo mc" >/dev/null
+
+  msg_info "Add Wiren Board repo"
+  pct exec "$id" -- bash -c "curl -fsSL https://deb.wirenboard.com/wirenboard-release/wirenboard-release.key | gpg --dearmor -o /usr/share/keyrings/wirenboard.gpg"
+  pct exec "$id" -- bash -c "echo 'deb [signed-by=/usr/share/keyrings/wirenboard.gpg] http://deb.wirenboard.com/wb7/bullseye stable main' >/etc/apt/sources.list.d/wirenboard.list"
+  pct exec "$id" -- bash -c "apt-get update"
+
+  msg_info "Install UI and SSH"
+  pct exec "$id" -- bash -c "apt-get install -y wb-mqtt-homeui openssh-server"
+
+  msg_info "Mask unused WB services"
+  pct exec "$id" -- systemctl mask wb-hwconf-manager wb-mqtt-nm-helper wb-gsm wb-systime-adjust wb-usb-otg wb-modules || true
+
+  msg_info "Enable SSH and console"
+  pct exec "$id" -- systemctl enable ssh || true
+  pct exec "$id" -- systemctl enable getty@tty1.service || true
+  pct exec "$id" -- systemctl restart ssh || true
+
+  msg_ok "Customization complete"
+}
+
+# ---------- public entry ----------
+run_build(){
+  require_root; require_pve
+  header_info "$APP"
+
+  NEXTID=$(pvesh get /cluster/nextid)
+  local mode
+  mode=$(whiptail --title "${APP} LXC" --menu "Select mode" 12 60 3 \
+    "default" "Quick install" \
+    "advanced" "Edit resources" \
+    "exit" "Quit" 3>&1 1>&2 2>&3) || exit 0
+
+  CTID="$NEXTID"
+  HN="${APP,,}-wb"
+  CORE_COUNT=${CORE_COUNT:-2}
+  RAM_SIZE=${RAM_SIZE:-2048}
+  SWAP_SIZE=${SWAP_SIZE:-2048}
+  DISK_SIZE=${DISK_SIZE:-6}
+  BRG=${BRG:-vmbr0}
+  NET=${NET:-dhcp}
+  PW=""
+  SSH_PUB=""
+
+  if [[ "$mode" == "advanced" ]]; then
+    CTID=$(ask_input "Container ID" "$CTID")
+    HN=$(ask_input "Hostname" "$HN")
+    CORE_COUNT=$(ask_input "vCPUs" "$CORE_COUNT")
+    RAM_SIZE=$(ask_input "RAM MB" "$RAM_SIZE")
+    SWAP_SIZE=$(ask_input "SWAP MB" "$SWAP_SIZE")
+    DISK_SIZE=$(ask_input "Disk GB" "$DISK_SIZE")
+    BRG=$(ask_input "Bridge" "$BRG")
+    NET=$(ask_input "IPv4 (dhcp or CIDR,gw=x.x.x.x)" "$NET")
+    if ask_yesno "Set root password?"; then PW=$(ask_password "Root password"); fi
+    if ask_yesno "Paste SSH public key for root?"; then SSH_PUB=$(ask_input "ssh-ed25519/ssh-rsa line" ""); fi
+  fi
+
+  local tmpl_storage container_storage
+  tmpl_storage=$(select_storage template) || exit 1
+  container_storage=$(select_storage container) || exit 1
+
+  TEMPLATE=$(ensure_template "$tmpl_storage" "$TEMPLATE_URL")
+  create_ct "$CTID" "$tmpl_storage" "$TEMPLATE" "$container_storage"
+  pct start "$CTID"
+  wait_net "$CTID"
+  post_customize "$CTID"
+  description "$CTID"
+}
+
+# default description impl (override if needed)
+description(){
+  local id="$1" ip
+  ip=$(pct exec "$id" -- hostname -I | awk '{print $1}') || true
+  pct set "$id" -description "<p><b>${APP}</b> (WB bullseye armhf)<br>IP: ${ip}</p>"
+}
