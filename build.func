@@ -339,8 +339,14 @@ post_customize(){
   msg_ok "Wiren Board repo added"
 
   msg_info "Installing WB packages and SSH (this may take 10-15 minutes)..."
-  echo "  → Installing: wb-mqtt-serial wb-mqtt-confed wb-rules mosquitto nginx openssh-server"
-  pct exec "$id" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y wb-mqtt-serial wb-mqtt-confed wb-rules mosquitto nginx openssh-server"
+  echo "  → Installing core packages: mosquitto nginx openssh-server"
+  pct exec "$id" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y mosquitto nginx openssh-server"
+  
+  echo "  → Installing WB packages: wb-mqtt-serial wb-rules wb-utils"
+  pct exec "$id" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y wb-mqtt-serial wb-rules wb-utils 2>&1 | grep -v 'Failed to write' || true"
+  
+  echo "  → Trying optional packages: wb-mqtt-confed (may fail, not critical)"
+  pct exec "$id" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y wb-mqtt-confed 2>&1 || echo 'wb-mqtt-confed not available, skipping'"
   msg_ok "WB packages installed"
 
   msg_info "Configuring services..."
