@@ -340,13 +340,38 @@ post_customize(){
 
   msg_info "Installing WB packages and SSH (this may take 10-15 minutes)..."
   echo "  → Installing: wb-mqtt-serial wb-mqtt-confed wb-rules mosquitto nginx openssh-server"
-  pct exec "$id" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y wb-mqtt-serial wb-mqtt-confed wb-rules mosquitto nginx openssh-server"
-  msg_ok "WB packages installed"
+  pct exec "$id" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y wb-mqtt-serial wb-mqtt-confed wb-rules mosquitto nginx openssh-server" || {
+    msg_error "Package installation failed!"
+    exit 1
+  }
+  
+  # Verify critical packages are installed
+  echo "  → Verifying installation..."
+  pct exec "$id" -- dpkg -l wb-mqtt-serial mosquitto nginx >/dev/null 2>&1 || {
+    msg_error "Critical packages missing after installation!"
+    exit 1
+  }
+  msg_ok "WB packages installed and verified"
 
   msg_info "Configuring services..."
+  # Mask hardware-specific services that won't work in LXC
   pct exec "$id" -- systemctl mask wb-hwconf-manager wb-mqtt-nm-helper wb-gsm wb-systime-adjust wb-usb-otg wb-modules 2>/dev/null || true
+  
+  # Enable and start MQTT broker
+  pct exec "$id" -- systemctl enable mosquitto 2>/dev/null || true
+  pct exec "$id" -- systemctl start mosquitto 2>/dev/null || true
+  
+  # Enable and start nginx
+  pct exec "$id" -- systemctl enable nginx 2>/dev/null || true
+  pct exec "$id" -- systemctl start nginx 2>/dev/null || true
+  
+  # Enable and start wb-mqtt-serial
+  pct exec "$id" -- systemctl enable wb-mqtt-serial 2>/dev/null || true
+  pct exec "$id" -- systemctl start wb-mqtt-serial 2>/dev/null || true
+  
+  # Enable and start SSH
   pct exec "$id" -- systemctl enable ssh 2>/dev/null || true
-  pct exec "$id" -- systemctl restart ssh 2>/dev/null || true
+  pct exec "$id" -- systemctl start ssh 2>/dev/null || true
   
   # Install SSH keys if configured
   install_ssh_keys_into_ct "$id"
