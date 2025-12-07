@@ -51,46 +51,39 @@ ensure_template(){
 
   if [[ -f "$path" ]]; then
     msg_ok "Template already present: $filename"
-  patch_template_interfaces(){
-    local tarball="$1"
+    return 0
+  fi
 
-    # Ensure /etc/network/interfaces exists in template (PVE post_create_hook requirement)
-    if tar -tf "$tarball" | grep -Eq '(^|/)etc/network/interfaces$'; then
-      return 0
-    fi
+  msg_info "Downloading template: $url"
+  wget -q --show-progress -O "$path" "$url" || { msg_err "Download failed"; exit 1; }
+  msg_ok "Template downloaded"
+  echo "$filename"
+}
 
-    msg_warn "Template lacks /etc/network/interfaces, patching..."
-    local tmpdir
-    tmpdir="$(mktemp -d)"
-    tar -xf "$tarball" -C "$tmpdir"
-    mkdir -p "$tmpdir/etc/network"
-    cat >"$tmpdir/etc/network/interfaces" <<'EOF'
-    fi
-  iface lo inet loopback
+patch_template_interfaces(){
+  local tarball="$1"
 
+  # Ensure /etc/network/interfaces exists in template (PVE post_create_hook requirement)
+  if tar -tf "$tarball" | grep -Eq '(^|/)etc/network/interfaces$'; then
+    return 0
+  fi
 
-  iface eth0 inet dhcp
-  EOF
-    tar --numeric-owner -C "$tmpdir" -cJf "$tarball" .
-    rm -rf "$tmpdir"
-    msg_ok "Patched template with minimal /etc/network/interfaces"
-  }
-    msg_warn "Template lacks /etc/network/interfaces, patching..."
-    local tmpdir
-    tmpdir="$(mktemp -d)"
-    tar -xf "$tarball" -C "$tmpdir"
-    mkdir -p "$tmpdir/etc/network"
-    cat >"$tmpdir/etc/network/interfaces" <<'EOF'
-  auto lo
-  iface lo inet loopback
+  msg_warn "Template lacks /etc/network/interfaces, patching..."
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  tar -xf "$tarball" -C "$tmpdir"
+  mkdir -p "$tmpdir/etc/network"
+  cat >"$tmpdir/etc/network/interfaces" <<'EOF'
+auto lo
+iface lo inet loopback
 
-  auto eth0
-  iface eth0 inet dhcp
-  EOF
-    tar --numeric-owner -C "$tmpdir" -cJf "$tarball" .
-    rm -rf "$tmpdir"
-    msg_ok "Patched template with minimal /etc/network/interfaces"
-  }
+auto eth0
+iface eth0 inet dhcp
+EOF
+  tar --numeric-owner -C "$tmpdir" -cJf "$tarball" .
+  rm -rf "$tmpdir"
+  msg_ok "Patched template with minimal /etc/network/interfaces"
+}
 
 # ---------- pct helpers ----------
 create_ct(){
