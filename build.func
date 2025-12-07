@@ -177,16 +177,22 @@ post_customize(){
   pct exec "$id" -- bash -c "apt-get update"
   
   msg_info "Installing base packages (this may take 5-10 minutes on ARM emulation)..."
-  echo "  → Installing: curl gnupg ca-certificates sudo mc"
-  pct exec "$id" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y curl gnupg ca-certificates sudo mc"
+  echo "  → Installing: curl wget gnupg ca-certificates sudo mc"
+  pct exec "$id" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y curl wget gnupg ca-certificates sudo mc"
   msg_ok "Base packages installed"
 
   msg_info "Adding Wiren Board repository..."
-  pct exec "$id" -- bash -c "wget -qO - https://deb.wirenboard.com/wirenboard.gpg | gpg --dearmor -o /usr/share/keyrings/wirenboard.gpg 2>/dev/null" || \
-  pct exec "$id" -- bash -c "echo 'deb http://deb.wirenboard.com/wb7/bullseye stable main' > /etc/apt/sources.list.d/wirenboard.list"
+  # Download and install GPG key
+  pct exec "$id" -- bash -c "wget -qO /tmp/wb.gpg https://deb.wirenboard.com/wirenboard.gpg 2>/dev/null && gpg --dearmor -o /usr/share/keyrings/wirenboard.gpg < /tmp/wb.gpg && rm /tmp/wb.gpg" || \
+  pct exec "$id" -- bash -c "curl -fsSL https://deb.wirenboard.com/wirenboard.gpg | gpg --dearmor -o /usr/share/keyrings/wirenboard.gpg"
   
-  # If GPG key was successfully added, use signed repo
-  pct exec "$id" -- bash -c "if [ -f /usr/share/keyrings/wirenboard.gpg ]; then echo 'deb [signed-by=/usr/share/keyrings/wirenboard.gpg] http://deb.wirenboard.com/wb7/bullseye stable main' > /etc/apt/sources.list.d/wirenboard.list; fi"
+  # Add repository with or without GPG signature
+  if pct exec "$id" -- bash -c "[ -f /usr/share/keyrings/wirenboard.gpg ] && [ -s /usr/share/keyrings/wirenboard.gpg ]"; then
+    pct exec "$id" -- bash -c "echo 'deb [signed-by=/usr/share/keyrings/wirenboard.gpg] http://deb.wirenboard.com/wb7/bullseye stable main' > /etc/apt/sources.list.d/wirenboard.list"
+  else
+    msg_warn "Could not fetch WB GPG key, adding repo without signature verification"
+    pct exec "$id" -- bash -c "echo 'deb [trusted=yes] http://deb.wirenboard.com/wb7/bullseye stable main' > /etc/apt/sources.list.d/wirenboard.list"
+  fi
   
   pct exec "$id" -- bash -c "apt-get update"
   msg_ok "Wiren Board repo added"
