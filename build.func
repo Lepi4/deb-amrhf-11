@@ -173,6 +173,16 @@ post_customize(){
   pct exec "$id" -- systemctl enable ssh 2>/dev/null || true
   pct exec "$id" -- systemctl enable getty@tty1.service 2>/dev/null || true
   pct exec "$id" -- systemctl restart ssh 2>/dev/null || true
+  
+  msg_info "Configuring auto-login for console..."
+  pct exec "$id" -- bash -c 'mkdir -p /etc/systemd/system/console-getty.service.d/'
+  pct exec "$id" -- bash -c 'cat > /etc/systemd/system/console-getty.service.d/override.conf <<EOF
+[Service]
+ExecStart=
+ExecStart=-/sbin/agetty --autologin root --noclear --keep-baud console 115200,38400,9600 \$TERM
+EOF'
+  pct exec "$id" -- systemctl daemon-reload 2>/dev/null || true
+  msg_ok "Auto-login configured"
 
   msg_ok "Customization complete"
 }
