@@ -4,7 +4,7 @@
 # Template: Debian bullseye armhf (LXC Jenkins) with Wiren Board repo + home UI.
 
 APP="WB-Bullseye"
-TEMPLATE_URL="https://jenkins.linuxcontainers.org/view/Images/job/image-debian/architecture=armhf,release=bullseye,variant=default/3829/artifact/rootfs.tar.xz"
+TEMPLATE_URL="https://images.linuxcontainers.org/images/debian/bullseye/armhf/default/rootfs.tar.xz"
 CORE_COUNT=2
 RAM_SIZE=2048
 SWAP_SIZE=2048
