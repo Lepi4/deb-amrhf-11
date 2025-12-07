@@ -158,11 +158,12 @@ post_customize(){
   msg_ok "Base packages installed"
 
   msg_info "Adding Wiren Board repository..."
-  pct exec "$id" -- bash -c "wget -qO - https://deb.wirenboard.com/wirenboard.gpg | gpg --dearmor -o /usr/share/keyrings/wirenboard.gpg" || \
-  pct exec "$id" -- bash -c "curl -fsSL https://deb.wirenboard.com/wirenboard.gpg | gpg --dearmor -o /usr/share/keyrings/wirenboard.gpg" || \
-  pct exec "$id" -- bash -c "echo 'WARNING: Could not fetch WB GPG key, adding repo without signature verification' && touch /usr/share/keyrings/wirenboard.gpg"
+  pct exec "$id" -- bash -c "wget -qO - https://deb.wirenboard.com/wirenboard.gpg | gpg --dearmor -o /usr/share/keyrings/wirenboard.gpg 2>/dev/null" || \
+  pct exec "$id" -- bash -c "echo 'deb http://deb.wirenboard.com/wb7/bullseye stable main' > /etc/apt/sources.list.d/wirenboard.list"
   
-  pct exec "$id" -- bash -c "echo 'deb [signed-by=/usr/share/keyrings/wirenboard.gpg] https://deb.wirenboard.com/debian bullseye main' >/etc/apt/sources.list.d/wirenboard.list"
+  # If GPG key was successfully added, use signed repo
+  pct exec "$id" -- bash -c "if [ -f /usr/share/keyrings/wirenboard.gpg ]; then echo 'deb [signed-by=/usr/share/keyrings/wirenboard.gpg] http://deb.wirenboard.com/wb7/bullseye stable main' > /etc/apt/sources.list.d/wirenboard.list; fi"
+  
   pct exec "$id" -- bash -c "apt-get update"
   msg_ok "Wiren Board repo added"
 
