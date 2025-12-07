@@ -122,9 +122,29 @@ create_ct(){
 }
 
 wait_net(){
-  local id="$1"; msg_info "Waiting for network (CT $id)"; for _ in {1..20}; do
-    ip=$(pct exec "$id" -- hostname -I | awk '{print $1}') || true
-    if [[ -n "$ip" ]]; then msg_ok "IP: $ip"; return 0; fi; sleep 1; done; msg_warn "No IP detected"; }
+  local id="$1"
+  msg_info "Waiting for network (CT $id)"
+  
+  # Ensure DHCP client runs
+  pct exec "$id" -- bash -c "dhclient eth0 2>/dev/null || true" || true
+  
+  for attempt in {1..30}; do
+    ip=$(pct exec "$id" -- hostname -I 2>/dev/null | awk '{print $1}') || true
+    if [[ -n "$ip" ]]; then
+      msg_ok "IP: $ip"
+      # Test internet connectivity
+      if pct exec "$id" -- ping -c 1 8.8.8.8 >/dev/null 2>&1; then
+        msg_ok "Internet connectivity confirmed"
+        return 0
+      fi
+    fi
+    sleep 2
+  done
+  
+  msg_err "Failed to get network connectivity after 60 seconds"
+  msg_warn "Container may not have internet access"
+  return 1
+}
 
 post_customize(){
   local id="$1"
@@ -194,7 +214,13 @@ run_build(){
   TEMPLATE="$(basename "$TEMPLATE_URL")"
   create_ct "$CTID" "$tmpl_storage" "$TEMPLATE" "$container_storage"
   pct start "$CTID"
-  wait_net "$CTID"
+  
+  if ! wait_net "$CTID"; then
+    msg_err "Network setup failed. Please check container network configuration manually."
+    msg_info "To debug: pct enter $CTID, then run: dhclient eth0 && ping 8.8.8.8"
+    exit 1
+  fi
+  
   post_customize "$CTID"
   description "$CTID"
 }
