@@ -190,7 +190,8 @@ run_build(){
   tmpl_storage=$(select_storage template) || exit 1
   container_storage=$(select_storage container) || exit 1
 
-  TEMPLATE=$(ensure_template "$tmpl_storage" "$TEMPLATE_URL")
+  ensure_template "$tmpl_storage" "$TEMPLATE_URL"
+  TEMPLATE="$(basename "$TEMPLATE_URL")"
   create_ct "$CTID" "$tmpl_storage" "$TEMPLATE" "$container_storage"
   pct start "$CTID"
   wait_net "$CTID"
