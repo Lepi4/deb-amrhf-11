@@ -14,6 +14,164 @@ msg_warn(){ echo -e "${WARN} $*" >&2; }
 
 header_info(){ clear; echo "=== $1 LXC Builder (WB) ==="; }
 
+# ---------- SSH Key Management ----------
+SSH_KEYS_FILE=""
+SSH_ENABLED="no"
+
+ssh_extract_keys_from_file() {
+  local f="$1"
+  [[ -r "$f" ]] || return 0
+  tr -d '\r' <"$f" | awk '
+    /^[[:space:]]*#/ {next}
+    /^[[:space:]]*$/ {next}
+    /^(ssh-(rsa|ed25519)|ecdsa-sha2-nistp256|sk-(ssh-ed25519|ecdsa-sha2-nistp256))[[:space:]]+/ {print; next}
+    {
+      match($0, /(ssh-(rsa|ed25519)|ecdsa-sha2-nistp256|sk-(ssh-ed25519|ecdsa-sha2-nistp256))[[:space:]]+/)
+      if (RSTART>0) { print substr($0, RSTART) }
+    }
+  '
+}
+
+find_ssh_keys() {
+  local -a cand=()
+  local re='(ssh-(rsa|ed25519)|ecdsa-sha2-nistp256|sk-(ssh-ed25519|ecdsa-sha2-nistp256))'
+  
+  shopt -s nullglob
+  cand+=(/root/.ssh/authorized_keys /root/.ssh/authorized_keys2)
+  cand+=(/root/.ssh/*.pub)
+  cand+=(/etc/ssh/authorized_keys)
+  shopt -u nullglob
+  
+  local -a files=()
+  local total=0
+  
+  for f in "${cand[@]}"; do
+    [[ -f "$f" && -r "$f" ]] || continue
+    local base="$(basename -- "$f")"
+    
+    case "$base" in
+      known_hosts|known_hosts.*|config) continue ;;
+      id_*) [[ "$f" != *.pub ]] && continue ;;
+    esac
+    
+    local c=$(tr -d '\r' <"$f" | awk '/^[[:space:]]*#/ {next} /^[[:space:]]*$/ {next} {print}' | grep -E -c "$re" || true)
+    
+    if ((c > 0)); then
+      files+=("$f")
+      total=$((total + c))
+    fi
+  done
+  
+  if ((${#files[@]} == 0)) && [[ -r /root/.ssh/authorized_keys ]]; then
+    if grep -E -q "$re" /root/.ssh/authorized_keys; then
+      files+=(/root/.ssh/authorized_keys)
+      total=$((total + $(grep -E -c "$re" /root/.ssh/authorized_keys || echo 0)))
+    fi
+  fi
+  
+  echo "$total"
+  (IFS=:; echo "${files[*]}")
+}
+
+configure_ssh_settings() {
+  echo ""
+  echo "SSH Configuration"
+  echo "────────────────────────────────────────"
+  
+  # Find available keys
+  read -r key_count key_files <<<"$(find_ssh_keys)"
+  
+  if [[ "$key_count" -gt 0 ]]; then
+    echo "Found $key_count SSH key(s) on host"
+    echo ""
+    echo "Select SSH setup:"
+    echo "  1) Use found keys (${key_count} key(s))"
+    echo "  2) Enter key manually"
+    echo "  3) Password only (no SSH keys)"
+    echo ""
+    read -p "Choice [1-3]: " ssh_choice
+    
+    case "$ssh_choice" in
+      1)
+        SSH_KEYS_FILE="$(mktemp)"
+        IFS=: read -ra files <<<"$key_files"
+        for f in "${files[@]}"; do
+          ssh_extract_keys_from_file "$f" >> "$SSH_KEYS_FILE"
+        done
+        sort -u -o "$SSH_KEYS_FILE" "$SSH_KEYS_FILE"
+        SSH_ENABLED="yes"
+        msg_ok "Will use $key_count SSH key(s)"
+        ;;
+      2)
+        echo ""
+        echo "Paste SSH public key (ssh-rsa, ssh-ed25519, etc.):"
+        read -r manual_key
+        if [[ -n "$manual_key" ]]; then
+          SSH_KEYS_FILE="$(mktemp)"
+          echo "$manual_key" > "$SSH_KEYS_FILE"
+          SSH_ENABLED="yes"
+          msg_ok "Manual SSH key added"
+        fi
+        ;;
+      3)
+        SSH_ENABLED="no"
+        msg_ok "SSH keys disabled, password only"
+        ;;
+    esac
+  else
+    echo "No SSH keys found on host"
+    echo ""
+    read -p "Enter SSH public key manually? [y/N]: " manual
+    if [[ "$manual" =~ ^[Yy] ]]; then
+      echo "Paste SSH public key:"
+      read -r manual_key
+      if [[ -n "$manual_key" ]]; then
+        SSH_KEYS_FILE="$(mktemp)"
+        echo "$manual_key" > "$SSH_KEYS_FILE"
+        SSH_ENABLED="yes"
+        msg_ok "Manual SSH key added"
+      fi
+    else
+      SSH_ENABLED="no"
+      msg_ok "SSH keys disabled, password only"
+    fi
+  fi
+  
+  echo ""
+}
+
+install_ssh_keys_into_ct() {
+  local ctid="$1"
+  
+  [[ "$SSH_ENABLED" != "yes" ]] && return 0
+  [[ ! -s "$SSH_KEYS_FILE" ]] && return 0
+  
+  msg_info "Installing SSH keys into CT $ctid"
+  
+  pct exec "$ctid" -- bash -c 'mkdir -p /root/.ssh && chmod 700 /root/.ssh' || {
+    msg_err "Failed to create /root/.ssh"
+    return 1
+  }
+  
+  if pct push "$ctid" "$SSH_KEYS_FILE" /root/.ssh/authorized_keys >/dev/null 2>&1; then
+    :
+  else
+    pct exec "$ctid" -- bash -c "cat > /root/.ssh/authorized_keys" <"$SSH_KEYS_FILE" || {
+      msg_err "Failed to write authorized_keys"
+      return 1
+    }
+  fi
+  
+  pct exec "$ctid" -- bash -c 'chmod 600 /root/.ssh/authorized_keys' || true
+  
+  msg_ok "SSH keys installed into CT $ctid"
+  
+  # Cleanup temp file
+  [[ -n "$SSH_KEYS_FILE" && -f "$SSH_KEYS_FILE" ]] && rm -f "$SSH_KEYS_FILE"
+  
+  return 0
+}
+
 # ---------- guards ----------
 require_root(){ if [[ $(id -u) -ne 0 ]]; then msg_err "Run as root on Proxmox host"; exit 1; fi; }
 require_pve(){ command -v pveversion >/dev/null || { msg_err "Run on Proxmox VE host"; exit 1; }; }
@@ -112,7 +270,6 @@ EOF
 # ---------- pct helpers ----------
 create_ct(){
   local ctid="$1" tmpl_storage="$2" tmpl_file="$3" container_storage="$4" opts=()
-  local ssh_file=""
   opts+=("-arch" "armhf")
   opts+=("-hostname" "$HN")
   opts+=("-cores" "$CORE_COUNT")
@@ -124,15 +281,9 @@ create_ct(){
   opts+=("-features" "nesting=1")
   opts+=("-net0" "name=eth0,bridge=${BRG},ip=${NET}")
   [[ -n "$PW" ]] && opts+=("-password" "$PW")
-  if [[ -n "$SSH_PUB" ]]; then
-    ssh_file="$(mktemp)"
-    printf '%s\n' "$SSH_PUB" >"$ssh_file"
-    opts+=("-ssh-public-keys" "$ssh_file")
-  fi
 
   msg_info "Creating CT $ctid"
   pct create "$ctid" "${tmpl_storage}:vztmpl/${tmpl_file}" "${opts[@]}"
-  [[ -n "$ssh_file" ]] && rm -f "$ssh_file"
   msg_ok "CT $ctid created"
 
   # Copy QEMU ARM emulator into container for armhf architecture
@@ -205,8 +356,13 @@ post_customize(){
   msg_info "Configuring services..."
   pct exec "$id" -- systemctl mask wb-hwconf-manager wb-mqtt-nm-helper wb-gsm wb-systime-adjust wb-usb-otg wb-modules 2>/dev/null || true
   pct exec "$id" -- systemctl enable ssh 2>/dev/null || true
-  pct exec "$id" -- systemctl enable getty@tty1.service 2>/dev/null || true
   pct exec "$id" -- systemctl restart ssh 2>/dev/null || true
+  
+  # Install SSH keys if configured
+  install_ssh_keys_into_ct "$id"
+  
+  # Install SSH keys if configured
+  install_ssh_keys_into_ct "$id"
   
   msg_info "Configuring auto-login for Proxmox console..."
   # Method 1: Configure inittab for classic console (works on Debian 11)
@@ -262,7 +418,6 @@ run_build(){
   BRG=${BRG:-vmbr0}
   NET=${NET:-dhcp}
   PW=""
-  SSH_PUB=""
 
   if [[ "$mode" == "advanced" ]]; then
     CTID=$(ask_input "Container ID" "$CTID")
@@ -274,8 +429,10 @@ run_build(){
     BRG=$(ask_input "Bridge" "$BRG")
     NET=$(ask_input "IPv4 (dhcp or CIDR,gw=x.x.x.x)" "$NET")
     if ask_yesno "Set root password?"; then PW=$(ask_password "Root password"); fi
-    if ask_yesno "Paste SSH public key for root?"; then SSH_PUB=$(ask_input "ssh-ed25519/ssh-rsa line" ""); fi
   fi
+
+  # Configure SSH (replaces old SSH_PUB manual entry)
+  configure_ssh_settings
 
   local tmpl_storage container_storage
   tmpl_storage=$(select_storage template) || exit 1
