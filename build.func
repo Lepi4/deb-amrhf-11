@@ -354,35 +354,18 @@ post_customize(){
   # Install SSH keys if configured
   install_ssh_keys_into_ct "$id"
   
-  msg_info "Configuring auto-login for Proxmox console..."
-  # Method 1: Configure inittab for classic console (works on Debian 11)
+  msg_info "Configuring console getty for Proxmox web console..."
+  # Ensure getty runs on console (just login prompt, no auto-login)
   pct exec "$id" -- bash -c '
-    if [ -f /etc/inittab ]; then
-      # Backup original
-      cp /etc/inittab /etc/inittab.bak
-      # Replace console line with auto-login
-      sed -i "s|^\(1:2345:respawn:\).*|\1/sbin/agetty --autologin root --noclear console linux|" /etc/inittab
-      # Reload init
-      telinit q 2>/dev/null || true
-    fi
-  '
-  
-  # Method 2: Configure systemd override for serial-getty@hvc0
-  pct exec "$id" -- bash -c '
-    mkdir -p /etc/systemd/system/serial-getty@hvc0.service.d/
-    cat > /etc/systemd/system/serial-getty@hvc0.service.d/autologin.conf <<EOF
-[Service]
-ExecStart=
-ExecStart=-/sbin/agetty --autologin root -o "-p -- \\\\u" --keep-baud 115200,38400,9600 %I \$TERM
-Type=idle
-StandardInput=tty
-StandardOutput=tty
-EOF
-    systemctl daemon-reload
+    # Enable getty on console
+    systemctl enable getty@tty1.service 2>/dev/null || true
+    systemctl enable console-getty.service 2>/dev/null || true
+    
+    # For LXC containers, also enable serial-getty on hvc0 (Proxmox console device)
     systemctl enable serial-getty@hvc0.service 2>/dev/null || true
+    systemctl start serial-getty@hvc0.service 2>/dev/null || true
   '
-  
-  msg_ok "Auto-login configured for Proxmox console"
+  msg_ok "Console getty configured"
 
   msg_ok "Customization complete"
 }
