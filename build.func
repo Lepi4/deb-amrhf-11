@@ -57,6 +57,30 @@ ensure_template(){
   msg_info "Downloading template: $url"
   wget -q --show-progress -O "$path" "$url" || { msg_err "Download failed"; exit 1; }
   msg_ok "Template downloaded"
+  
+  # Patch template to include /etc/network/interfaces
+  msg_info "Patching template..."
+  local tmpdir extractdir
+  tmpdir="$(mktemp -d)"
+  extractdir="$tmpdir/rootfs"
+  mkdir -p "$extractdir"
+  
+  tar -xf "$path" -C "$extractdir"
+  mkdir -p "$extractdir/etc/network"
+  cat > "$extractdir/etc/network/interfaces" <<'EOF'
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+EOF
+  
+  # Repack the template
+  tar -C "$extractdir" -cJf "$path.tmp" .
+  mv "$path.tmp" "$path"
+  rm -rf "$tmpdir"
+  msg_ok "Template patched"
+  
   echo "$filename"
 }
 
