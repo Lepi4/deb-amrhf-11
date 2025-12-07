@@ -148,24 +148,31 @@ wait_net(){
 
 post_customize(){
   local id="$1"
-  msg_info "Base packages"
-  pct exec "$id" -- bash -c "apt-get update && apt-get install -y curl gnupg ca-certificates sudo mc" >/dev/null
+  
+  msg_info "Updating package lists..."
+  pct exec "$id" -- bash -c "apt-get update"
+  
+  msg_info "Installing base packages (this may take 5-10 minutes on ARM emulation)..."
+  echo "  → Installing: curl gnupg ca-certificates sudo mc"
+  pct exec "$id" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y curl gnupg ca-certificates sudo mc"
+  msg_ok "Base packages installed"
 
-  msg_info "Add Wiren Board repo"
+  msg_info "Adding Wiren Board repository..."
   pct exec "$id" -- bash -c "curl -fsSL https://deb.wirenboard.com/wirenboard-release/wirenboard-release.key | gpg --dearmor -o /usr/share/keyrings/wirenboard.gpg"
   pct exec "$id" -- bash -c "echo 'deb [signed-by=/usr/share/keyrings/wirenboard.gpg] http://deb.wirenboard.com/wb7/bullseye stable main' >/etc/apt/sources.list.d/wirenboard.list"
   pct exec "$id" -- bash -c "apt-get update"
+  msg_ok "Wiren Board repo added"
 
-  msg_info "Install UI and SSH"
-  pct exec "$id" -- bash -c "apt-get install -y wb-mqtt-homeui openssh-server"
+  msg_info "Installing WB UI and SSH (this may take 10-15 minutes)..."
+  echo "  → Installing: wb-mqtt-homeui openssh-server"
+  pct exec "$id" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y wb-mqtt-homeui openssh-server"
+  msg_ok "WB packages installed"
 
-  msg_info "Mask unused WB services"
-  pct exec "$id" -- systemctl mask wb-hwconf-manager wb-mqtt-nm-helper wb-gsm wb-systime-adjust wb-usb-otg wb-modules || true
-
-  msg_info "Enable SSH and console"
-  pct exec "$id" -- systemctl enable ssh || true
-  pct exec "$id" -- systemctl enable getty@tty1.service || true
-  pct exec "$id" -- systemctl restart ssh || true
+  msg_info "Configuring services..."
+  pct exec "$id" -- systemctl mask wb-hwconf-manager wb-mqtt-nm-helper wb-gsm wb-systime-adjust wb-usb-otg wb-modules 2>/dev/null || true
+  pct exec "$id" -- systemctl enable ssh 2>/dev/null || true
+  pct exec "$id" -- systemctl enable getty@tty1.service 2>/dev/null || true
+  pct exec "$id" -- systemctl restart ssh 2>/dev/null || true
 
   msg_ok "Customization complete"
 }
